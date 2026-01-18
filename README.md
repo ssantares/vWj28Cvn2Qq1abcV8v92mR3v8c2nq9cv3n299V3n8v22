@@ -16,4 +16,4 @@ the creation of the flag bypass, using a third party for now before making it a 
 
 # version 1.3
 
-The current state of antares, with way more appealing UIs, a functional flag bypass (and an even better one 👀), it is now the first reliable, mobile fastflag injector, now being on desktop too!!
+The current state of antares, with way more appealing UIs, a functional flag bypass (and an even better one 👀), it is now the first reliable, mobile fastflag injector, now being on desktop asw
