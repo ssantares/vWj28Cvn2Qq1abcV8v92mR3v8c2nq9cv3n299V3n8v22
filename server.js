@@ -7,34 +7,45 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-const ADMIN_SECRET = process.env.ADMIN_SECRET; // must match your Lua script environment
+const PORT = process.env.PORT || 3000;
+const ADMIN_SECRET = process.env.ADMIN_SECRET || "antares8282jviwm1lapci2n1d";
 
-let keys = {};
-let sessions = {};
+// In-memory storage for simplicity
+const sessions = {};
+const keys = {}; // key: true if used
 
-// Generate session
+// Generate a session
 app.post("/session", (req, res) => {
-    const sessionId = uuid();
-    sessions[sessionId] = true;
-    res.json({ session: sessionId });
+  const sessionId = uuid();
+  sessions[sessionId] = { created: Date.now() };
+  res.json({ session: sessionId });
 });
 
-// Redeem key
+// Redeem a key
 app.post("/redeem", (req, res) => {
-    const { session, key, playerId } = req.body;
-    if (!sessions[session]) return res.status(403).json({ success: false, error: "Invalid session" });
-    if (!keys[key]) return res.status(403).json({ success: false, error: "Invalid key" });
-    delete sessions[session];
-    keys[key] = playerId; // mark key as used
-    res.json({ success: true });
+  const { session, key, playerId } = req.body;
+  if (!session || !sessions[session]) return res.status(400).json({ success: false, error: "Invalid session" });
+  if (!key) return res.status(400).json({ success: false, error: "Missing key" });
+
+  if (keys[key]) {
+    return res.json({ success: false }); // already used
+  }
+
+  // Mark key as used
+  keys[key] = true;
+  res.json({ success: true });
 });
 
-// Generate new key (admin only)
+// Admin endpoint to generate keys
 app.post("/genkey", (req, res) => {
-    if (req.headers["x-admin-secret"] !== ADMIN_SECRET) return res.status(403).json({ error: "Forbidden" });
-    const key = uuid().replace(/-/g, "").slice(0, 24);
-    keys[key] = null; // not used yet
-    res.json({ key });
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "Invalid admin secret" });
+
+  const newKey = uuid().replace(/-/g, "").slice(0, 32); // 32-char key
+  keys[newKey] = false; // not used
+  res.json({ key: newKey });
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("Server running"));
+app.listen(PORT, () => {
+  console.log(`Antares server running on port ${PORT}`);
+});
