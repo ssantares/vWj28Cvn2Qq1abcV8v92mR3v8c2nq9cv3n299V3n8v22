@@ -4,67 +4,98 @@ const bodyParser = require("body-parser");
 const app = express();
 app.use(bodyParser.json());
 
-/*
-KEY STORAGE FORMAT:
-keys = {
-  "KEYSTRING": {
-     used: false,
-     owner: null
-  }
-}
-*/
+// ===============================
+// CONFIG
+// ===============================
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
+
+// In-memory storage (resets on restart)
+const sessions = {};
 const keys = {};
 
-// SESSION STORAGE
-const sessions = {};
+// ===============================
+// UTILS
+// ===============================
+function randomString(len = 24) {
+	return Math.random().toString(36).substring(2, 2 + len);
+}
 
-// ===== CREATE A SESSION =====
+// ===============================
+// ADMIN: GENERATE KEY (POSTMAN)
+// ===============================
+app.get("/genkey", (req, res) => {
+	const adminSecret = req.headers["x-admin-secret"];
+
+	if (!adminSecret || adminSecret !== ADMIN_SECRET) {
+		return res.status(403).json({ error: "Forbidden" });
+	}
+
+	const key = "ANTARES-" + randomString(10).toUpperCase();
+
+	keys[key] = {
+		redeemed: false,
+		playerId: null
+	};
+
+	res.json({ key });
+});
+
+// ===============================
+// ROBLOX: CREATE SESSION
+// ===============================
 app.post("/session", (req, res) => {
-	const session = Math.random().toString(36).substring(2, 15);
-	sessions[session] = { created: Date.now() };
+	const session = randomString(32);
+
+	sessions[session] = {
+		created: Date.now()
+	};
+
 	res.json({ session });
 });
 
-// ===== REDEEM KEY =====
+// ===============================
+// ROBLOX: REDEEM KEY
+// ===============================
 app.post("/redeem", (req, res) => {
 	const { session, key, playerId } = req.body;
 
-	if (!sessions[session]) {
+	if (!session || !sessions[session]) {
 		return res.json({ success: false, error: "Invalid session" });
 	}
 
-	if (!keys[key]) {
+	if (!key || !keys[key]) {
 		return res.json({ success: false, error: "Invalid key" });
 	}
 
 	const entry = keys[key];
 
-	// 🔒 Key already redeemed by someone else
-	if (entry.used && entry.owner !== playerId) {
-		return res.json({ success: false, error: "Key already used" });
-	}
-
-	// 🔒 First redemption
-	if (!entry.used) {
-		entry.used = true;
-		entry.owner = playerId;
+	// First redemption
+	if (!entry.redeemed) {
+		entry.redeemed = true;
+		entry.playerId = playerId;
 		return res.json({ success: true });
 	}
 
-	// 🔓 Same player reusing their key
-	if (entry.owner === playerId) {
+	// Already redeemed: only allow same player
+	if (entry.playerId === playerId) {
 		return res.json({ success: true });
 	}
 
-	res.json({ success: false });
+	// Redeemed by someone else
+	return res.json({ success: false, error: "Key already used" });
 });
 
-// ===== GENERATE KEY (YOUR EXISTING PAGE) =====
-app.get("/genkey", (req, res) => {
-	const key = Math.random().toString(36).substring(2, 14).toUpperCase();
-	keys[key] = { used: false, owner: null };
-	res.send(key);
+// ===============================
+// HEALTH CHECK
+// ===============================
+app.get("/", (req, res) => {
+	res.send("Antares key server online");
 });
 
+// ===============================
+// START SERVER
+// ===============================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Antares server running"));
+app.listen(PORT, () => {
+	console.log("Antares server running on port", PORT);
+});
