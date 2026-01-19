@@ -1,117 +1,119 @@
-const TIERS = {
-  trial: {
-    duration: 14 * 24 * 60 * 60 * 1000, // 14 days
-    bind: false
-  },
-  monthly: {
-    duration: 30 * 24 * 60 * 60 * 1000, // 30 days
-    bind: true
-  },
-  permanent: {
-    duration: null, // no expiration
-    bind: true
-  }
-}
-
-
 const express = require("express");
-const bodyParser = require("body-parser");
-
+const fs = require("fs");
+const crypto = require("crypto");
 const app = express();
-app.use(bodyParser.json());
 
-// ===============================
-// CONFIG
-// ===============================
-const ADMIN_SECRET = process.env.ADMIN_SECRET;
+app.use(express.json());
 
-// In-memory storage (resets on restart)
-const sessions = {};
-const keys = {};
+const KEYS_FILE = "./keys.json";
+const ADMIN_SECRET = process.env.ADMIN_SECRET || "changeme";
 
-// ===============================
-// UTILS
-// ===============================
-function randomString(len = 24) {
-	return Math.random().toString(36).substring(2, 2 + len);
+// Ensure keys.json exists
+if (!fs.existsSync(KEYS_FILE)) {
+    fs.writeFileSync(KEYS_FILE, "{}");
 }
 
-// ===============================
-// ADMIN: GENERATE KEY (POSTMAN)
-// ===============================
+function loadKeys() {
+    return JSON.parse(fs.readFileSync(KEYS_FILE, "utf8"));
+}
+
+function saveKeys(keys) {
+    fs.writeFileSync(KEYS_FILE, JSON.stringify(keys, null, 2));
+}
+
+function randomPart(len = 8) {
+    return crypto.randomBytes(len).toString("hex").toUpperCase().slice(0, len);
+}
+
+function generateKey(tier) {
+    if (tier === "trial") return `ANTARES-T-${randomPart(10)}`;
+    if (tier === "monthly") return `ANTARES-M-${randomPart(6)}`;
+    if (tier === "permanent") return `ANTARES-P-${randomPart(9)}`;
+    throw new Error("Invalid tier");
+}
+
+// ===================
+// Generate key
+// ===================
 app.get("/genkey", (req, res) => {
-	const adminSecret = req.headers["x-admin-secret"];
+    const secret = req.headers["x-admin-secret"];
+    if (secret !== ADMIN_SECRET) {
+        return res.status(403).json({ error: "Forbidden" });
+    }
 
-	if (!adminSecret || adminSecret !== ADMIN_SECRET) {
-		return res.status(403).json({ error: "Forbidden" });
-	}
+    const tier = req.query.tier;
+    if (!["trial", "monthly", "permanent"].includes(tier)) {
+        return res.status(400).json({ error: "Invalid tier" });
+    }
 
-	const key = "ANTARES-" + randomString(10).toUpperCase();
+    const keys = loadKeys();
+    const key = generateKey(tier);
 
-	keys[key] = {
-		redeemed: false,
-		playerId: null
-	};
+    let duration = null;
+    if (tier === "trial") duration = 14 * 24 * 60 * 60 * 1000;
+    if (tier === "monthly") duration = 30 * 24 * 60 * 60 * 1000;
 
-	res.json({ key });
+    keys[key] = {
+        tier,
+        createdAt: Date.now(),
+        duration,          // null = permanent
+        redeemedBy: null,
+        redeemedAt: null
+    };
+
+    saveKeys(keys);
+    res.json({ key, tier });
 });
 
-// ===============================
-// ROBLOX: CREATE SESSION
-// ===============================
+// ===================
+// Session
+// ===================
 app.post("/session", (req, res) => {
-	const session = randomString(32);
-
-	sessions[session] = {
-		created: Date.now()
-	};
-
-	res.json({ session });
+    res.json({
+        session: crypto.randomUUID()
+    });
 });
 
-// ===============================
-// ROBLOX: REDEEM KEY
-// ===============================
+// ===================
+// Redeem key
+// ===================
 app.post("/redeem", (req, res) => {
-	const { session, key, playerId } = req.body;
+    const { key, playerId } = req.body;
+    if (!key || !playerId) {
+        return res.json({ success: false });
+    }
 
-	if (!session || !sessions[session]) {
-		return res.json({ success: false, error: "Invalid session" });
-	}
+    const keys = loadKeys();
+    const data = keys[key];
+    if (!data) return res.json({ success: false });
 
-	if (!key || !keys[key]) {
-		return res.json({ success: false, error: "Invalid key" });
-	}
+    // Expiration check
+    if (data.duration) {
+        if (Date.now() > data.createdAt + data.duration) {
+            return res.json({ success: false });
+        }
+    }
 
-	const entry = keys[key];
+    // Trial = universal
+    if (data.tier === "trial") {
+        return res.json({ success: true });
+    }
 
-	// First redemption
-	if (!entry.redeemed) {
-		entry.redeemed = true;
-		entry.playerId = playerId;
-		return res.json({ success: true });
-	}
+    // Monthly / Permanent = bind on first use
+    if (!data.redeemedBy) {
+        data.redeemedBy = playerId;
+        data.redeemedAt = Date.now();
+        saveKeys(keys);
+        return res.json({ success: true });
+    }
 
-	// Already redeemed: only allow same player
-	if (entry.playerId === playerId) {
-		return res.json({ success: true });
-	}
+    // Must match bound player
+    if (data.redeemedBy === playerId) {
+        return res.json({ success: true });
+    }
 
-	// Redeemed by someone else
-	return res.json({ success: false, error: "Key already used" });
+    return res.json({ success: false });
 });
 
-// ===============================
-// HEALTH CHECK
-// ===============================
-app.get("/", (req, res) => {
-	res.send("Antares key server online");
-});
-
-// ===============================
-// START SERVER
-// ===============================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-	console.log("Antares server running on port", PORT);
-});
+app.listen(PORT, () => console.log("Antares server running"));
